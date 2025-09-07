@@ -12,15 +12,16 @@ export async function POST(req: Request) {
     try {
         const tokens = getTokens("demo-user");
         if (!tokens?.access_token) {
-            // If not authenticated, tell user to connect
+            // Tell UI to render a connect button
             return NextResponse.json({
-                reply: "Cloudinary needs OAuth. Go to /api/cloudinary/oauth/start to connect.",
+                reply: "Cloudinary needs OAuth to continue.",
+                actionUrl: "/api/cloudinary/oauth/start",
             });
         }
 
         const client = await connectCloudinary("asset-management");
 
-        // TODO: call real MCP tool here
+        // TODO: call a real MCP tool here
         await client.close();
 
         return NextResponse.json({ reply: `Authorized. You said: ${text}` });
@@ -29,7 +30,8 @@ export async function POST(req: Request) {
 
         if (code === 401) {
             return NextResponse.json({
-                reply: "Token invalid or expired. Reconnect here: /api/cloudinary/oauth/start",
+                reply: "Token invalid or expired.",
+                actionUrl: "/api/cloudinary/oauth/start",
             });
         }
 

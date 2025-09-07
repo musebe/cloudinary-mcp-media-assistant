@@ -7,7 +7,12 @@ import { MessageBubble } from './message-bubble';
 import { ChatInput } from './chat-input';
 import { useState } from 'react';
 
-type Msg = { id: string; role: 'user' | 'assistant'; text: string };
+type Msg = {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  actionUrl?: string;
+};
 
 export function ChatContainer() {
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -32,10 +37,15 @@ export function ChatContainer() {
 
       const data = await res.json();
 
-      // Add assistant reply
+      // Add assistant reply, include optional actionUrl
       setMessages((prev) => [
         ...prev,
-        { id: crypto.randomUUID(), role: 'assistant', text: data.reply },
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          text: data.reply,
+          actionUrl: data.actionUrl,
+        },
       ]);
     } catch (err) {
       console.error(err);
@@ -58,7 +68,21 @@ export function ChatContainer() {
         ) : (
           <div className='mx-auto flex w-full max-w-2xl flex-col gap-3'>
             {messages.map((m) => (
-              <MessageBubble key={m.id} role={m.role} text={m.text} />
+              <div key={m.id} className='space-y-2'>
+                <MessageBubble role={m.role} text={m.text} />
+                {m.actionUrl && m.role === 'assistant' && (
+                  <div className='flex justify-start'>
+                    <a
+                      href={m.actionUrl}
+                      target='_blank'
+                      rel='noopener noreferrer'
+                      className='inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90'
+                    >
+                      Connect to Cloudinary
+                    </a>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}
