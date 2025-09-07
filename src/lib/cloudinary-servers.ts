@@ -2,20 +2,9 @@
 // Docs: https://cloudinary.com/documentation/cloudinary_llm_mcp
 
 export const cloudinaryServers = [
-    {
-        name: "asset-management",
-        url: "https://mcp.cloudinary.com/asset-management/sse",
-    },
-    {
-        name: "env-config",
-        url: "https://mcp.cloudinary.com/env-config/sse",
-    },
-    {
-        name: "smd",
-        url: "https://mcp.cloudinary.com/smd/sse",
-    },
-    {
-        name: "analysis",
-        url: "https://mcp.cloudinary.com/analysis/sse",
-    },
+    { name: "asset-management", url: "https://asset-management.mcp.cloudinary.com/sse" },
+    { name: "environment-config", url: "https://environment-config.mcp.cloudinary.com/sse" },
+    { name: "structured-metadata", url: "https://structured-metadata.mcp.cloudinary.com/sse" },
+    { name: "analysis", url: "https://analysis.mcp.cloudinary.com/sse" },
+    { name: "mediaflows", url: "https://mediaflows.mcp.cloudinary.com/v2/mcp" },
 ];

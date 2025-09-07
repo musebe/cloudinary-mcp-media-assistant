@@ -6,14 +6,8 @@ export async function connectCloudinary(serverName: string) {
     const server = cloudinaryServers.find((s) => s.name === serverName);
     if (!server) throw new Error(`Unknown server: ${serverName}`);
 
-    const client = new Client({
-        name: "cloudinary-mcp-client",
-        version: "0.1.0",
-    });
-
-    // SSE transport needs a URL object
+    const client = new Client({ name: "cloudinary-mcp-client", version: "0.1.0" });
     const transport = new SSEClientTransport(new URL(server.url));
-
     await client.connect(transport);
     return client;
 }
