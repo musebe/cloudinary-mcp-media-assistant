@@ -1,3 +1,11 @@
 {
-  "cSpell.words": ["mediaflows", "modelcontextprotocol", "pkce", "shadcn"]
+  "cSpell.words": [
+    "creds",
+    "mediaflows",
+    "modelcontextprotocol",
+    "pkce",
+    "shadcn",
+    "supergateway",
+    "turbopack"
+  ]
 }
