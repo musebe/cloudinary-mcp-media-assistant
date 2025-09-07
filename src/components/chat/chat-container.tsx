@@ -12,6 +12,44 @@ type Msg = { id: string; role: 'user' | 'assistant'; text: string };
 export function ChatContainer() {
   const [messages, setMessages] = useState<Msg[]>([]);
 
+  async function handleSend(text: string) {
+    // Add user message
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: 'user', text },
+    ]);
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Error: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      // Add assistant reply
+      setMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'assistant', text: data.reply },
+      ]);
+    } catch (err) {
+      console.error(err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          text: 'Something went wrong. Please try again.',
+        },
+      ]);
+    }
+  }
+
   return (
     <div className='flex h-[70vh] flex-col'>
       <ScrollArea className='flex-1 p-4'>
@@ -26,16 +64,7 @@ export function ChatContainer() {
         )}
       </ScrollArea>
       <Separator />
-      <ChatInput
-        onSend={(text) =>
-          setMessages((prev) => [
-            ...prev,
-            { id: crypto.randomUUID(), role: 'user', text },
-            // We will replace this with a server action call.
-            { id: crypto.randomUUID(), role: 'assistant', text: 'OK.' },
-          ])
-        }
-      />
+      <ChatInput onSend={handleSend} />
     </div>
   );
 }
