@@ -3,6 +3,7 @@
 import { ChatMessage, ToolContent } from '@/types';
 import { connectCloudinary } from '@/lib/mcp-client';
 import { toAssetsFromContent, parseUploadResult } from '@/lib/mcp-utils';
+import { inspect } from 'node:util';
 
 type CallToolResult = { content?: ToolContent[] };
 type ListToolsResult = { tools?: { name: string }[] };
@@ -38,6 +39,10 @@ export async function sendMessageAction(
                 arguments: { uploadRequest: { file: dataUri, fileName: file.name, folder: "chat_uploads" } },
             })) as CallToolResult;
 
+            console.log("--- Raw Upload Response from Cloudinary MCP ---");
+            console.log(inspect(res, { depth: null, colors: true }));
+            console.log("---------------------------------------------");
+
             const uploaded = parseUploadResult(res?.content);
             assistantMsg = {
                 id: crypto.randomUUID(),
@@ -47,8 +52,8 @@ export async function sendMessageAction(
             };
         } else {
             const wantList = /^(list|show)\s+(images|pics|photos?)$/i.test(text) || /^images?$/i.test(text);
-            const renameMatch = text.match(/^rename\s+(.+?)\s+to\s+(.+)$/i);
             const renameLastMatch = text.match(/^rename the above image to\s+(.+)$/i);
+            const renameMatch = text.match(/^rename\s+(.+?)\s+to\s+(.+)$/i);
 
             if (wantList) {
                 const res = (await client.callTool({ name: "list-images", arguments: {} })) as CallToolResult;
