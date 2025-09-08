@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { connectCloudinary } from "@/lib/mcp-client";
+import type { AssetItem } from "@/components/chat/asset-list";
 
-/** Types that match common MCP client shapes */
 type ToolInfo = { name: string };
 type ListToolsResult = { tools?: ToolInfo[] };
 
@@ -10,64 +10,89 @@ type JSONPart = { type: "json"; json: unknown };
 type ToolContent = TextPart | JSONPart | { type: string;[k: string]: unknown };
 type CallToolResult = { content?: ToolContent[] };
 
-/** Narrowing helpers */
 function isObject(v: unknown): v is Record<string, unknown> {
     return typeof v === "object" && v !== null;
 }
 function isArray(v: unknown): v is unknown[] {
     return Array.isArray(v);
 }
-function isTextPart(p: ToolContent): p is TextPart {
-    return isObject(p) && p.type === "text" && typeof (p as Record<string, unknown>).text === "string";
-}
 function isJSONPart(p: ToolContent): p is JSONPart {
     return isObject(p) && p.type === "json" && "json" in p;
 }
 
-/** Extract a readable list out of a tool JSON payload if present */
-function extractListFromContent(content: ToolContent[]): string | null {
-    const jsonPart = content.find(isJSONPart);
-    if (jsonPart) {
-        const j = jsonPart.json;
+/** Clean a URL, remove quotes or JSON fragments */
+function cleanUrl(u?: string): string | undefined {
+    if (!u || typeof u !== "string") return undefined;
+    // keep only up to first space or quote
+    const trimmed = u.split(/[\s"']/)[0] ?? u;
+    try {
+        return new URL(trimmed).toString();
+    } catch {
+        return undefined;
+    }
+}
 
-        // Try common Cloudinary list shapes:
-        // { resources: [{ public_id, secure_url, ... }], next_cursor? }
-        // or { items: [...] }
-        if (isObject(j)) {
-            const resources = ((): unknown[] => {
-                if (isArray(j.resources)) return j.resources;
-                if (isArray(j.items)) return j.items;
-                return [];
-            })();
+/** Parse Cloudinary list JSON into AssetItem[] */
+function toAssetsFromContent(content: ToolContent[]): AssetItem[] | null {
+    // Prefer JSON part
+    let data: unknown = content.find(isJSONPart)?.json;
 
-            if (resources.length) {
-                const lines = resources.slice(0, 5).map((r, i) => {
-                    if (!isObject(r)) return `• item_${i + 1}`;
-                    const id =
-                        (typeof r.public_id === "string" && r.public_id) ||
-                        (typeof r.asset_id === "string" && r.asset_id) ||
-                        (typeof (r as Record<string, unknown>).publicId === "string" &&
-                            (r as Record<string, string>).publicId) ||
-                        `item_${i + 1}`;
-
-                    const url =
-                        (typeof r.secure_url === "string" && r.secure_url) ||
-                        (typeof r.url === "string" && r.url) ||
-                        (typeof (r as Record<string, unknown>).secureUrl === "string" &&
-                            (r as Record<string, string>).secureUrl) ||
-                        "";
-
-                    return url ? `• ${id} — ${url}` : `• ${id}`;
-                });
-                return lines.join("\n");
-            }
+    // Some servers may send JSON as string
+    if (typeof data === "string") {
+        try {
+            data = JSON.parse(data);
+        } catch {
+            data = null;
         }
     }
 
-    const textPart = content.find(isTextPart);
-    if (textPart) return textPart.text;
+    if (!isObject(data)) return null;
 
-    return null;
+    const arr: unknown[] =
+        (isArray(data.resources) && data.resources) ||
+        (isArray(data.items) && data.items) ||
+        [];
+
+    const out: AssetItem[] = [];
+    for (const r of arr.slice(0, 5)) {
+        if (!isObject(r)) continue;
+
+        const id =
+            (typeof r.public_id === "string" && r.public_id) ||
+            (typeof r.publicId === "string" && r.publicId) ||
+            (typeof r.asset_id === "string" && r.asset_id) ||
+            "(unknown)";
+
+        const folder =
+            (typeof r.folder === "string" && r.folder) ||
+            (typeof r.folder_path === "string" && r.folder_path) ||
+            undefined;
+
+        const secure = cleanUrl(
+            (r.secure_url as string) || (r.secureUrl as string)
+        );
+        const plain = cleanUrl(r.url as string);
+        const url = secure || plain;
+
+        const createdAt =
+            (typeof r.created_at === "string" && r.created_at) ||
+            (typeof r.createdAt === "string" && r.createdAt) ||
+            undefined;
+
+        const format = typeof r.format === "string" ? r.format : undefined;
+        const width = typeof r.width === "number" ? r.width : undefined;
+        const height = typeof r.height === "number" ? r.height : undefined;
+
+        // Tiny thumb, safe if on Cloudinary
+        const thumbUrl =
+            url && url.includes("/image/upload/")
+                ? url.replace("/image/upload/", "/image/upload/c_fill,w_160,h_160,q_auto,f_auto/")
+                : url;
+
+        out.push({ id, url, thumbUrl, folder, createdAt, format, width, height });
+    }
+
+    return out.length ? out : null;
 }
 
 export async function POST(req: Request) {
@@ -77,44 +102,41 @@ export async function POST(req: Request) {
     try {
         const client = await connectCloudinary("asset-management");
 
-        // Do we want a list now
         const wantList =
-            /^(list|show)\s+(images|pics|photos?)$/i.test(text) ||
-            /^images?$/i.test(text);
+            /^(list|show)\s+(images|pics|photos?)$/i.test(text) || /^images?$/i.test(text);
 
         if (wantList && client.callTool) {
-            // Call list-images
             const res = (await client.callTool({
                 name: "list-images",
-                arguments: { max_results: 5 },
+                arguments: { max_results: 10 },
             })) as CallToolResult;
 
-            const content = isArray(res?.content)
-                ? (res.content as ToolContent[])
-                : [];
+            const content = Array.isArray(res?.content) ? (res.content as ToolContent[]) : [];
+            const assets = toAssetsFromContent(content);
 
-            const summary = extractListFromContent(content);
             await client.close?.();
 
-            if (summary) {
+            if (assets && assets.length) {
                 return NextResponse.json({
-                    reply: `Here are your latest images:\n${summary}`,
+                    reply: "Here are your latest images:",
+                    assets,
                 });
             }
 
             return NextResponse.json({
-                reply: "I could not parse the list. Try again later.",
+                reply: "No images found or response could not be parsed.",
             });
         }
 
-        // Otherwise, list tools so we know what is available
+        // Default, send tools as an array for better UI
         const toolsResp = (await client.listTools?.()) as ListToolsResult | undefined;
-        const toolNames = toolsResp?.tools?.map((t) => t.name) ?? [];
+        const tools = toolsResp?.tools?.map((t) => t.name) ?? [];
         await client.close?.();
 
-        const list = toolNames.length ? toolNames.join(", ") : "none";
         return NextResponse.json({
-            reply: `Local MCP ready. Tools: ${list}.\nTip, type "list images" to fetch your top 5.`,
+            reply: "Local MCP ready.",
+            tools,
+            hint: 'Tip, type "list images" to fetch your top 5.',
         });
     } catch (err) {
         console.error(err);

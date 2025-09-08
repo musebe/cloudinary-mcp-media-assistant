@@ -6,6 +6,8 @@ import { EmptyState } from './empty-state';
 import { MessageBubble } from './message-bubble';
 import { ChatInput } from './chat-input';
 import { RichText } from './rich-text';
+import { AssetList, type AssetItem } from './asset-list';
+import { ToolsList } from './tools-list';
 import { useState } from 'react';
 
 type Msg = {
@@ -13,6 +15,9 @@ type Msg = {
   role: 'user' | 'assistant';
   text: string;
   actionUrl?: string;
+  assets?: AssetItem[];
+  tools?: string[];
+  hint?: string;
 };
 
 export function ChatContainer() {
@@ -23,6 +28,7 @@ export function ChatContainer() {
       ...prev,
       { id: crypto.randomUUID(), role: 'user', text },
     ]);
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -30,6 +36,7 @@ export function ChatContainer() {
         body: JSON.stringify({ text }),
       });
       const data = await res.json();
+
       setMessages((prev) => [
         ...prev,
         {
@@ -37,6 +44,9 @@ export function ChatContainer() {
           role: 'assistant',
           text: data.reply,
           actionUrl: data.actionUrl,
+          assets: data.assets,
+          tools: data.tools,
+          hint: data.hint,
         },
       ]);
     } catch {
@@ -52,18 +62,27 @@ export function ChatContainer() {
   }
 
   return (
-    // key change: overflow-hidden to keep everything inside the card
     <div className='flex h-[70vh] flex-col overflow-hidden'>
-      {/* only vertical scroll, no horizontal */}
       <ScrollArea className='flex-1 overflow-y-auto overflow-x-hidden px-4 py-4'>
         {messages.length === 0 ? (
           <EmptyState />
         ) : (
           <div className='mx-auto flex w-full max-w-2xl flex-col gap-4'>
             {messages.map((m) => (
-              <div key={m.id} className='space-y-2'>
+              <div key={m.id} className='space-y-3'>
                 <MessageBubble role={m.role}>
-                  <RichText text={m.text} />
+                  <div className='space-y-3'>
+                    <RichText text={m.text} />
+                    {m.tools && <ToolsList tools={m.tools} />}
+                    {m.assets && m.assets.length > 0 && (
+                      <AssetList items={m.assets} />
+                    )}
+                    {m.hint && (
+                      <div className='text-xs text-muted-foreground'>
+                        {m.hint}
+                      </div>
+                    )}
+                  </div>
                 </MessageBubble>
 
                 {m.actionUrl && m.role === 'assistant' && (
