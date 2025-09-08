@@ -8,7 +8,8 @@ import { ChatInput } from './chat-input';
 import { RichText } from './rich-text';
 import { AssetList, type AssetItem } from './asset-list';
 import { ToolsList } from './tools-list';
-import { useState } from 'react';
+import { TypingBubble } from './typing-bubble';
+import { useRef, useState } from 'react';
 
 type Msg = {
   id: string;
@@ -22,12 +23,31 @@ type Msg = {
 
 export function ChatContainer() {
   const [messages, setMessages] = useState<Msg[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // We control our own scroll area content and auto-scroll without useEffect.
+  const listRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+
+  function scrollToBottom(smooth = true) {
+    // Use a microtask so DOM updates after setState are applied.
+    queueMicrotask(() => {
+      endRef.current?.scrollIntoView({
+        behavior: smooth ? 'smooth' : 'auto',
+        block: 'end',
+      });
+    });
+  }
 
   async function handleSend(text: string) {
+    // push user message
     setMessages((prev) => [
       ...prev,
       { id: crypto.randomUUID(), role: 'user', text },
     ]);
+    scrollToBottom();
+
+    setLoading(true);
 
     try {
       const res = await fetch('/api/chat', {
@@ -42,7 +62,7 @@ export function ChatContainer() {
         {
           id: crypto.randomUUID(),
           role: 'assistant',
-          text: data.reply,
+          text: data.reply ?? '',
           actionUrl: data.actionUrl,
           assets: data.assets,
           tools: data.tools,
@@ -58,16 +78,24 @@ export function ChatContainer() {
           text: 'Something went wrong. Please try again.',
         },
       ]);
+    } finally {
+      setLoading(false);
+      scrollToBottom();
     }
   }
 
   return (
     <div className='flex h-[70vh] flex-col overflow-hidden'>
+      {/* vertical scroll only, anchor keeps view pinned near bottom when new content arrives */}
       <ScrollArea className='flex-1 overflow-y-auto overflow-x-hidden px-4 py-4'>
         {messages.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className='mx-auto flex w-full max-w-2xl flex-col gap-4'>
+          <div
+            ref={listRef}
+            className='mx-auto flex w-full max-w-2xl flex-col gap-4 [scroll-behavior:smooth]'
+            style={{ overflowAnchor: 'auto' }}
+          >
             {messages.map((m) => (
               <div key={m.id} className='space-y-3'>
                 <MessageBubble role={m.role}>
@@ -99,9 +127,20 @@ export function ChatContainer() {
                 )}
               </div>
             ))}
+
+            {/* typing indicator while we wait */}
+            {loading && (
+              <div className='mt-1'>
+                <TypingBubble />
+              </div>
+            )}
+
+            {/* scroll anchor */}
+            <div ref={endRef} aria-hidden />
           </div>
         )}
       </ScrollArea>
+
       <Separator />
       <ChatInput onSend={handleSend} />
     </div>
