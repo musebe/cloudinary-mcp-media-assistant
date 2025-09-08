@@ -1,23 +1,25 @@
 import { cn } from '@/lib/utils';
+import { ReactNode } from 'react';
 
 export function MessageBubble({
   role,
-  text,
+  children,
 }: {
   role: 'user' | 'assistant';
-  text: string;
+  children: ReactNode;
 }) {
   const isUser = role === 'user';
   return (
     <div
       className={cn(
-        'w-fit max-w-[85%] rounded-xl px-3 py-2 text-sm',
+        // clamp width to container, wrap long text
+        'w-fit max-w-[92%] md:max-w-[80%] break-words whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm md:text-[15px] leading-relaxed shadow-sm',
         isUser
           ? 'ml-auto bg-primary text-primary-foreground'
           : 'bg-muted text-foreground'
       )}
     >
-      {text}
+      {children}
     </div>
   );
 }

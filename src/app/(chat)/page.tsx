@@ -13,7 +13,8 @@ export default function Page() {
         </p>
       </section>
 
-      <Card className='mx-auto w-full max-w-3xl p-0'>
+      {/* add overflow-hidden so the chat never spills out */}
+      <Card className='mx-auto w-full max-w-3xl overflow-hidden p-0'>
         <ChatContainer />
       </Card>
     </div>
