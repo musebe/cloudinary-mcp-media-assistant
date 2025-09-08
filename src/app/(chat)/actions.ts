@@ -21,25 +21,23 @@ export async function sendMessageAction(
         text: text || `Uploading ${formData.get('fileName') as string}...`,
     };
 
+    const lastAssetId = formData.get('lastAssetId') as string | null;
+
+    let client;
     try {
-        const client = await connectCloudinary("asset-management");
+        client = await connectCloudinary("asset-management");
         let assistantMsg: ChatMessage | null = null;
 
         if (file instanceof File) {
-            // ... (file upload logic remains the same)
             const buffer = Buffer.from(await file.arrayBuffer());
             const base64 = buffer.toString("base64");
             const mime = file.type || "application/octet-stream";
             const dataUri = `data:${mime};base64,${base64}`;
-
             const res = (await client.callTool({
                 name: "upload-asset",
-                arguments: {
-                    uploadRequest: { file: dataUri, fileName: file.name, folder: "chat_uploads" },
-                },
+                arguments: { uploadRequest: { file: dataUri, fileName: file.name, folder: "chat_uploads" } },
             })) as CallToolResult;
 
-            await client.close?.();
             const uploaded = parseUploadResult(res?.content);
             assistantMsg = {
                 id: crypto.randomUUID(),
@@ -47,38 +45,52 @@ export async function sendMessageAction(
                 text: uploaded ? "Image uploaded successfully." : "Upload complete.",
                 assets: uploaded ? [uploaded] : undefined,
             };
-
         } else {
-            // Text Processing Logic
             const wantList = /^(list|show)\s+(images|pics|photos?)$/i.test(text) || /^images?$/i.test(text);
-            // ✨ 1. Regex to detect a rename command
             const renameMatch = text.match(/^rename\s+(.+?)\s+to\s+(.+)$/i);
+            const renameLastMatch = text.match(/^rename the above image to\s+(.+)$/i);
 
             if (wantList) {
-                // ... (list images logic remains the same)
                 const res = (await client.callTool({ name: "list-images", arguments: {} })) as CallToolResult;
                 const assets = toAssetsFromContent(res?.content || []);
-                await client.close?.();
                 assistantMsg = {
                     id: crypto.randomUUID(),
                     role: 'assistant',
                     text: assets?.length ? "Here are your latest images:" : "No images found.",
                     assets: assets ?? undefined,
                 };
+            } else if (renameLastMatch && lastAssetId) {
+                const from_public_id = lastAssetId;
+                const to_public_id = renameLastMatch[1].trim();
+                const res = await client.callTool({
+                    name: "asset-rename",
+                    arguments: { resourceType: 'image', requestBody: { from_public_id, to_public_id } },
+                }) as CallToolResult;
 
-                // ✨ 2. New branch to handle the rename logic
+                const renamedAsset = parseUploadResult(res?.content);
+                if (renamedAsset) {
+                    assistantMsg = {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Successfully renamed asset to "${to_public_id}".`,
+                        assets: [renamedAsset]
+                    };
+                } else {
+                    assistantMsg = {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Could not rename asset. The ID "${from_public_id}" may no longer be valid.`
+                    };
+                }
             } else if (renameMatch) {
                 const from_public_id = renameMatch[1].trim();
                 const to_public_id = renameMatch[2].trim();
-
                 const res = await client.callTool({
                     name: "asset-rename",
-                    arguments: { from_public_id, to_public_id },
+                    arguments: { resourceType: 'image', requestBody: { from_public_id, to_public_id } },
                 }) as CallToolResult;
 
-                await client.close?.();
                 const renamedAsset = parseUploadResult(res?.content);
-
                 if (renamedAsset) {
                     assistantMsg = {
                         id: crypto.randomUUID(),
@@ -93,12 +105,9 @@ export async function sendMessageAction(
                         text: `Could not rename asset. Please ensure the public ID "${from_public_id}" exists.`
                     };
                 }
-
             } else {
-                // ... (default greet and list tools logic remains the same)
                 const toolsResp = (await client.listTools?.()) as ListToolsResult | undefined;
                 const tools = toolsResp?.tools?.map((t) => t.name) ?? [];
-                await client.close?.();
                 assistantMsg = {
                     id: crypto.randomUUID(),
                     role: 'assistant',
@@ -109,7 +118,7 @@ export async function sendMessageAction(
             }
         }
 
-        return [...currentState, userMessage, assistantMsg];
+        return [...currentState, userMessage, assistantMsg!];
 
     } catch (err) {
         console.error(err);
@@ -119,5 +128,7 @@ export async function sendMessageAction(
             text: "Sorry, an error occurred. Please check the server logs.",
         };
         return [...currentState, userMessage, errorMsg];
+    } finally {
+        await client?.close?.();
     }
 }

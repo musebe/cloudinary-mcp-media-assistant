@@ -18,6 +18,9 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  serverActions: {
+    bodySizeLimit: '10mb', // Allow up to 10 MB uploads
+  },
 };
 
 export default nextConfig;

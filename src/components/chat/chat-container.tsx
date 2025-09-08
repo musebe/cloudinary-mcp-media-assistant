@@ -1,16 +1,20 @@
 'use client';
 
+// ✨ Add useState and useEffect
 import {
   useRef,
   useOptimistic,
   startTransition,
   useLayoutEffect,
   useActionState,
+  useState,
+  useEffect,
 } from 'react';
 
 import type { ChatMessage } from '@/types';
 import { sendMessageAction } from '@/app/(chat)/actions';
 
+// ... (other imports remain the same)
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { EmptyState } from './empty-state';
@@ -22,13 +26,11 @@ import { ToolsList } from './tools-list';
 import { TypingBubble } from './typing-bubble';
 
 export function ChatContainer() {
-  // useActionState gives loading as isPending
   const [messages, formAction, isPending] = useActionState(
     sendMessageAction,
     [] as ChatMessage[]
   );
 
-  // Optimistic reducer and de-dupe by id
   const [optimisticMessages, addOptimisticMessage] = useOptimistic<
     ChatMessage[],
     ChatMessage
@@ -37,12 +39,21 @@ export function ChatContainer() {
     return [...state, update];
   });
 
+  // ✨ 1. Add state to store the last asset's ID
+  const [lastAssetId, setLastAssetId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
-  // Keep view scrolled to the latest message
   useLayoutEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [optimisticMessages, isPending]);
+
+  // ✨ 2. Add an effect to update the last asset ID from new messages
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage?.role === 'assistant' && lastMessage.assets?.length) {
+      setLastAssetId(lastMessage.assets[0].id);
+    }
+  }, [messages]);
 
   const handleSend = (data: { text?: string; file?: File }) => {
     if (isPending) return;
@@ -60,8 +71,11 @@ export function ChatContainer() {
       formData.append('file', data.file);
       formData.append('fileName', data.file.name);
     }
+    // ✨ 3. Pass the last asset ID to the server as context
+    if (lastAssetId) {
+      formData.append('lastAssetId', lastAssetId);
+    }
 
-    // Do optimistic add and action inside a transition
     startTransition(() => {
       addOptimisticMessage(userMessage);
       formAction(formData);
@@ -69,8 +83,8 @@ export function ChatContainer() {
   };
 
   return (
+    // The JSX structure is unchanged to preserve the layout
     <div className='flex h-[70vh] flex-col'>
-      {/* Scrollable messages */}
       <ScrollArea className='flex-1 min-h-0 px-4 py-4'>
         {optimisticMessages.length === 0 ? (
           <EmptyState />
@@ -92,13 +106,11 @@ export function ChatContainer() {
                 </MessageBubble>
               </div>
             ))}
-            {/* Anchor keeps scroll at bottom */}
             <div ref={endRef} aria-hidden />
           </div>
         )}
       </ScrollArea>
 
-      {/* Fixed typing area, stays at bottom */}
       {isPending ? (
         <div className='px-4 pb-2'>
           <div className='mx-auto w-full max-w-2xl'>

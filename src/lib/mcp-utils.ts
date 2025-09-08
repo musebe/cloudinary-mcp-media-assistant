@@ -1,7 +1,5 @@
 import { AssetItem, ToolContent, JSONPart, TextPart } from "@/types";
 
-// (isObject, isJSONPart, isTextPart, and cleanUrl functions remain the same...)
-
 function isObject(v: unknown): v is Record<string, unknown> {
     return typeof v === "object" && v !== null;
 }
@@ -16,7 +14,6 @@ function cleanUrl(u?: string): string | undefined {
     const trimmed = u.split(/[\s"']/)[0] ?? u;
     try {
         const parsedUrl = new URL(trimmed);
-        // ✨ FIX: Always enforce the HTTPS protocol for security and config compatibility.
         parsedUrl.protocol = 'https';
         return parsedUrl.toString();
     } catch {
@@ -27,7 +24,6 @@ function cleanUrl(u?: string): string | undefined {
 
 /** Extract assets from MCP content */
 export function toAssetsFromContent(content: ToolContent[]): AssetItem[] | null {
-    // ... (logic to find 'data' remains the same)
     let data: unknown = content.find(isJSONPart)?.json;
 
     if (!data) {
@@ -51,8 +47,8 @@ export function toAssetsFromContent(content: ToolContent[]): AssetItem[] | null 
         if (!isObject(r)) continue;
         const ro = r as Record<string, unknown>;
 
-        // ✨ FIX: Generate a unique ID if none is found.
-        const id = (typeof ro.public_id === "string" && ro.public_id) || (typeof ro.asset_id === "string" && ro.asset_id) || crypto.randomUUID();
+        // ✨ FIX: Prioritize 'public_id' and ignore 'asset_id'.
+        const id = (typeof ro.public_id === "string" && ro.public_id) || crypto.randomUUID();
 
         const folder = (typeof ro.folder === "string" && ro.folder) || undefined;
         const url = cleanUrl((ro.secure_url as string | undefined) || (ro.url as string | undefined));
@@ -68,7 +64,6 @@ export function toAssetsFromContent(content: ToolContent[]): AssetItem[] | null 
 
 /** Extract uploaded asset info */
 export function parseUploadResult(content?: ToolContent[]): AssetItem | null {
-    // ... (logic to find 'data' remains the same)
     if (!content || !Array.isArray(content)) return null;
     let data: unknown = content.find(isJSONPart)?.json;
 
@@ -87,8 +82,8 @@ export function parseUploadResult(content?: ToolContent[]): AssetItem | null {
     if (!url) return null;
 
     return {
-        // ✨ FIX: Generate a unique ID if none is found.
-        id: (typeof ro.public_id === "string" && ro.public_id) || (typeof ro.asset_id === "string" && ro.asset_id) || crypto.randomUUID(),
+        // ✨ FIX: Prioritize 'public_id' and ignore 'asset_id' here as well.
+        id: (typeof ro.public_id === "string" && ro.public_id) || crypto.randomUUID(),
         url,
         thumbUrl: url,
         folder: typeof ro.folder === "string" ? ro.folder : undefined,
