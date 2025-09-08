@@ -22,16 +22,11 @@ export async function sendMessageAction(
     };
 
     try {
-        // ✨ FIX: Add a 1.5-second delay to simulate a real network request.
-        // This will make the typing bubble visible during local development.
-        await new Promise(resolve => setTimeout(resolve, 1500));
-
         const client = await connectCloudinary("asset-management");
         let assistantMsg: ChatMessage | null = null;
 
-        // ... (The rest of your logic remains exactly the same)
         if (file instanceof File) {
-            // ... file upload logic ...
+            // ... (file upload logic remains the same)
             const buffer = Buffer.from(await file.arrayBuffer());
             const base64 = buffer.toString("base64");
             const mime = file.type || "application/octet-stream";
@@ -45,7 +40,6 @@ export async function sendMessageAction(
             })) as CallToolResult;
 
             await client.close?.();
-
             const uploaded = parseUploadResult(res?.content);
             assistantMsg = {
                 id: crypto.randomUUID(),
@@ -53,26 +47,58 @@ export async function sendMessageAction(
                 text: uploaded ? "Image uploaded successfully." : "Upload complete.",
                 assets: uploaded ? [uploaded] : undefined,
             };
+
         } else {
-            // ... text processing logic ...
+            // Text Processing Logic
             const wantList = /^(list|show)\s+(images|pics|photos?)$/i.test(text) || /^images?$/i.test(text);
+            // ✨ 1. Regex to detect a rename command
+            const renameMatch = text.match(/^rename\s+(.+?)\s+to\s+(.+)$/i);
 
             if (wantList) {
+                // ... (list images logic remains the same)
                 const res = (await client.callTool({ name: "list-images", arguments: {} })) as CallToolResult;
                 const assets = toAssetsFromContent(res?.content || []);
                 await client.close?.();
-
                 assistantMsg = {
                     id: crypto.randomUUID(),
                     role: 'assistant',
                     text: assets?.length ? "Here are your latest images:" : "No images found.",
                     assets: assets ?? undefined,
                 };
+
+                // ✨ 2. New branch to handle the rename logic
+            } else if (renameMatch) {
+                const from_public_id = renameMatch[1].trim();
+                const to_public_id = renameMatch[2].trim();
+
+                const res = await client.callTool({
+                    name: "asset-rename",
+                    arguments: { from_public_id, to_public_id },
+                }) as CallToolResult;
+
+                await client.close?.();
+                const renamedAsset = parseUploadResult(res?.content);
+
+                if (renamedAsset) {
+                    assistantMsg = {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Successfully renamed asset to "${to_public_id}".`,
+                        assets: [renamedAsset]
+                    };
+                } else {
+                    assistantMsg = {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Could not rename asset. Please ensure the public ID "${from_public_id}" exists.`
+                    };
+                }
+
             } else {
+                // ... (default greet and list tools logic remains the same)
                 const toolsResp = (await client.listTools?.()) as ListToolsResult | undefined;
                 const tools = toolsResp?.tools?.map((t) => t.name) ?? [];
                 await client.close?.();
-
                 assistantMsg = {
                     id: crypto.randomUUID(),
                     role: 'assistant',
