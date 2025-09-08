@@ -41,16 +41,16 @@ export function toAssetsFromContent(content: ToolContent[]): AssetItem[] | null 
         if (!isObject(r)) continue;
         const ro = r as Record<string, unknown>;
 
-        const basePublicId = (typeof ro.publicId === 'string' && ro.publicId) || (typeof ro.public_id === 'string' && ro.public_id) || null;
-        const folder = (typeof ro.folder === 'string' && ro.folder) || null;
-        const assetId = (typeof ro.assetId === 'string' && ro.assetId) || (typeof ro.asset_id === 'string' && ro.asset_id) || null;
-        const fullPublicId = basePublicId && folder ? `${folder}/${basePublicId}` : basePublicId;
-        const finalId = fullPublicId || assetId || crypto.randomUUID();
+        // ✨ FIX: The 'list-images' command returns the full public_id. Use it directly.
+        // This prevents the "folder/folder/name" duplication bug.
+        const finalId = (typeof ro.publicId === 'string' && ro.publicId) ||
+            (typeof ro.public_id === 'string' && ro.public_id) ||
+            (typeof ro.asset_id === 'string' && ro.asset_id) || // Fallback for display key
+            crypto.randomUUID();
 
+        const folder = (typeof ro.folder === 'string' && ro.folder) || undefined;
         const url = cleanUrl((ro.secureUrl as string) || (ro.secure_url as string) || (ro.url as string));
-        // ✨ FIX: Ensure the result is 'string | undefined', not 'string | false'
         const createdAt = (typeof ro.createdAt === "string" && ro.createdAt) || (typeof ro.created_at === "string" && ro.created_at) || undefined;
-
         const format = typeof ro.format === "string" ? ro.format : undefined;
         const width = typeof ro.width === "number" ? ro.width : undefined;
         const height = typeof ro.height === "number" ? ro.height : undefined;
@@ -63,6 +63,7 @@ export function toAssetsFromContent(content: ToolContent[]): AssetItem[] | null 
 
 /** Extract uploaded asset info */
 export function parseUploadResult(content?: ToolContent[]): AssetItem | null {
+    // This function remains correct as the 'upload' tool returns folder and public_id separately.
     if (!content || !Array.isArray(content)) return null;
     let data: unknown = null;
     const textPart = content.find(isTextPart);
@@ -84,7 +85,6 @@ export function parseUploadResult(content?: ToolContent[]): AssetItem | null {
     const finalId = fullPublicId || assetId || crypto.randomUUID();
 
     const url = cleanUrl((ro.secureUrl as string) || (ro.secure_url as string) || (ro.url as string));
-    // ✨ FIX: Ensure the result is 'string | undefined', not 'string | false'
     const createdAt = (typeof ro.createdAt === "string" && ro.createdAt) || (typeof ro.created_at === "string" && ro.created_at) || undefined;
 
     if (!url) return null;
