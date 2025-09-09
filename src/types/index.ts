@@ -47,3 +47,16 @@ export type JSONPart = {
 
 // Represents the overall content from a tool, which can be text, JSON, or another custom type.
 export type ToolContent = TextPart | JSONPart | { type: string;[k: string]: unknown };
+
+// Represents the expected return type from a tool call.
+export type CallToolResult = { content?: ToolContent[] };
+
+// Represents the expected return type from listing available tools.
+export type ListToolsResult = { tools?: { name: string }[] };
+
+// Defines the shape of the MCP client for type safety.
+export type MCPClient = {
+    callTool: (args: { name: string; arguments?: Record<string, unknown> }) => Promise<CallToolResult>;
+    listTools?: () => Promise<ListToolsResult>;
+    close?: () => void;
+};
