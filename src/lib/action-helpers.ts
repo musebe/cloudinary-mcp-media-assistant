@@ -224,3 +224,38 @@ export function parseCreateFolderSuccess(content?: ToolContent[]): boolean {
     }
     return false;
 }
+
+export function parseFoldersFromContent(content?: ToolContent[]): string[] {
+    const out: string[] = [];
+    const from = (data: unknown) => {
+        if (!data || typeof data !== 'object') return;
+        const o = data as Record<string, unknown>;
+        const arr =
+            (Array.isArray(o.folders) && (o.folders as unknown[])) ||
+            (Array.isArray(o.items) && (o.items as unknown[])) ||
+            [];
+        for (const it of arr) {
+            if (!it || typeof it !== 'object') continue;
+            const r = it as Record<string, unknown>;
+            const name =
+                (typeof r.path === 'string' && r.path) ||
+                (typeof r.name === 'string' && r.name) ||
+                (typeof r.folder === 'string' && r.folder);
+            if (name) out.push(name);
+        }
+    };
+
+    const j = getJson(content);
+    if (j) from(j);
+
+    const t = getText(content);
+    if (t) {
+        try {
+            from(JSON.parse(t));
+        } catch {
+            /* ignore */
+        }
+    }
+
+    return out;
+}

@@ -1,6 +1,6 @@
 'use server';
 
-import { ChatMessage, MCPClient, CallToolResult } from '@/types';
+import { ChatMessage, MCPClient, CallToolResult, AssetItem } from '@/types';
 import { connectCloudinary } from '@/lib/mcp-client';
 import { toAssetsFromContent, parseUploadResult } from '@/lib/mcp-utils';
 import {
@@ -37,6 +37,7 @@ export async function sendMessageAction(
         let assistantMsg: ChatMessage | null = null;
 
         if (file instanceof File) {
+            // --- Upload ---
             const buffer = Buffer.from(await file.arrayBuffer());
             const base64 = buffer.toString('base64');
             const mime = file.type || 'application/octet-stream';
@@ -44,7 +45,9 @@ export async function sendMessageAction(
 
             const res = await client.callTool({
                 name: 'upload-asset',
-                arguments: { uploadRequest: { file: dataUri, fileName: file.name, folder: 'chat_uploads' } },
+                arguments: {
+                    uploadRequest: { file: dataUri, fileName: file.name, folder: 'chat_uploads' },
+                },
             });
 
             const uploaded = parseUploadResult(res?.content);
@@ -55,8 +58,19 @@ export async function sendMessageAction(
                 assets: uploaded ? [uploaded] : undefined,
             };
         } else {
+            // --- Text commands ---
             const wantList =
                 /^(list|show)\s+(images|pics|photos?)$/i.test(text) || /^images?$/i.test(text);
+
+            // NEW: list images in <folder>
+            const listImagesInMatch = text.match(
+                /^(list|show)\s+(images|assets|files|photos?)\s+(in|from|under|inside)\s+(.+)$/i,
+            );
+
+            // NEW: list folders (optionally in <folder>)
+            const listFoldersOnly = /^(list|show)\s+folders$/i.test(text);
+            const listFoldersInMatch = text.match(/^(list|show)\s+folders\s+(in|under|inside)\s+(.+)$/i);
+
             const renameLastMatch = text.match(/^rename the above image to\s+(.+)$/i);
             const renameMatch = text.match(/^rename\s+(.+?)\s+to\s+(.+)$/i);
             const deleteLastMatch = text.match(/^delete the above image$/i);
@@ -70,7 +84,181 @@ export async function sendMessageAction(
             const moveLastMatch = text.match(/^move the above image to\s+(.+)$/i);
             const moveMatch = text.match(/^move\s+(.+?)\s+to\s+(.+)$/i);
 
-            if (wantList) {
+            // Helper: build top N folders from assets (client-side fallback)
+            const uniqueTopFoldersFromAssets = (
+                assets: AssetItem[],
+                base?: string,
+                limit = 5,
+            ): string[] => {
+                const set = new Set<string>();
+                const baseNorm = (base || '').replace(/^\/+|\/+$/g, '');
+                const basePrefix = baseNorm ? `${baseNorm}/` : '';
+
+                for (const a of assets) {
+                    // derive the asset’s folder path
+                    let path = a.folder;
+                    if (!path) {
+                        const idNoExt = a.id.replace(/\.[^/.]+$/i, '');
+                        const slash = idNoExt.lastIndexOf('/');
+                        path = slash > 0 ? idNoExt.slice(0, slash) : '';
+                    }
+                    if (!path) continue; // ignore “No folder”
+
+                    if (baseNorm) {
+                        if (path === baseNorm) continue;
+                        if (!path.startsWith(basePrefix)) continue;
+                        const rest = path.slice(basePrefix.length);
+                        const top = rest.split('/')[0];
+                        if (top) set.add(`${baseNorm}/${top}`);
+                    } else {
+                        const top = path.split('/')[0];
+                        if (top) set.add(top);
+                    }
+                    if (set.size >= limit) break;
+                }
+                return Array.from(set).slice(0, limit);
+            };
+
+            // Helper: map folder paths into folder AssetItems (so UI shows 📁)
+            const toFolderItems = (folders: string[]): AssetItem[] =>
+                folders.map((f) => ({
+                    id: f,
+                    folder: f,
+                    // resourceType: 'folder', // 'folder' is not a valid AssetItem resourceType, so omit or set undefined
+                    resourceType: undefined,
+                }));
+
+            // Helper: try a wide set of list-folders tool names, else fallback
+            const tryListFolders = async (base?: string): Promise<AssetItem[] | null> => {
+                const tools = await listToolNames(client!);
+                const byExact = tools.find((n) =>
+                    ['list-folders', 'folders-list', 'assets-list-folders', 'list-subfolders'].includes(n),
+                );
+                const byLoose = tools.find((n) => /folders?.-?list|list-?folders?|sub.?folders/i.test(n));
+                const listTool = byExact || byLoose;
+
+                // parse folders from tool content
+                const extractFolders = (content?: unknown): string[] => {
+                    if (!content) return [];
+                    const pick = (data: unknown): string[] => {
+                        if (!data || typeof data !== 'object') return [];
+                        type FolderData = { folders?: unknown[]; sub_folders?: unknown[]; items?: unknown[] };
+                        const d = data as Partial<FolderData>;
+                        const arr =
+                            (Array.isArray(d.folders) && d.folders) ||
+                            (Array.isArray(d.sub_folders) && d.sub_folders) ||
+                            (Array.isArray(d.items) && d.items) ||
+                            [];
+                        const out: string[] = [];
+                        for (const it of arr) {
+                            if (!it || typeof it !== 'object') continue;
+                            // Use a more specific type guard instead of 'any'
+                            const maybeObj = it as { path?: unknown; name?: unknown };
+                            const name =
+                                (typeof maybeObj.path === 'string' && maybeObj.path) ||
+                                (typeof maybeObj.name === 'string' && maybeObj.name) ||
+                                '';
+                            if (name) out.push(name);
+                            if (out.length >= 5) break;
+                        }
+                        return out;
+                    };
+
+                    // content may be [{type:'json', json:{...}}] or [{type:'text', text:'...json...'}]
+                    const jsonPart = Array.isArray(content)
+                        ? content.find((p): p is { type: string; json: unknown } => typeof p === 'object' && p !== null && p.type === 'json' && 'json' in p)
+                        : undefined;
+                    if (jsonPart) return pick(jsonPart.json);
+
+                    const textPart = Array.isArray(content)
+                        ? content.find(
+                            (p): p is { type: string; text: string } =>
+                                typeof p === 'object' &&
+                                p !== null &&
+                                p.type === 'text' &&
+                                typeof (p as { text?: unknown }).text === 'string'
+                        )
+                        : undefined;
+                    if (textPart) {
+                        try {
+                            return pick(JSON.parse(textPart.text));
+                        } catch {
+                            return [];
+                        }
+                    }
+                    return [];
+                };
+
+                // Try tool if present
+                if (listTool) {
+                    const path = (base || '').trim().replace(/^\/+|\/+$/g, '');
+                    const shapes = [
+                        { arguments: path ? { path } : {} },
+                        { arguments: path ? { folder: path } : {} },
+                        { arguments: path ? { request: { path } } : {} },
+                        { arguments: path ? { requestBody: { path } } : {} },
+                    ] as const;
+
+                    for (const s of shapes) {
+                        try {
+                            const res = await client!.callTool({ name: listTool, ...s });
+                            const folders = extractFolders(res?.content);
+                            if (folders.length) return toFolderItems(folders.slice(0, 5));
+                        } catch {
+                            // try the next shape
+                        }
+                    }
+                    // tool exists but didn’t give folders → fall through to client fallback
+                }
+
+                // Fallback: derive from images
+                try {
+                    const res = await client!.callTool({ name: 'list-images', arguments: {} });
+                    const assets = toAssetsFromContent(res?.content || []) || [];
+                    const top = uniqueTopFoldersFromAssets(assets, base, 5);
+                    if (top.length) return toFolderItems(top);
+                } catch {
+                    // ignore
+                }
+                return null;
+            };
+
+            if (listImagesInMatch) {
+                // --- List images in a given folder (robust client-side filter) ---
+                const folder = listImagesInMatch[4].trim().replace(/^\/+|\/+$/g, '');
+                const res = await client.callTool({ name: 'list-images', arguments: {} });
+                const all = toAssetsFromContent(res?.content || []) || [];
+                const filtered = all.filter(
+                    (a) => a.folder === folder || a.id.replace(/\.[^/.]+$/i, '').startsWith(`${folder}/`),
+                );
+                assistantMsg = {
+                    id: crypto.randomUUID(),
+                    role: 'assistant',
+                    text: `Images in "${folder}":`,
+                    assets: filtered.slice(0, 5),
+                };
+
+            } else if (listFoldersOnly || listFoldersInMatch) {
+                // --- List folders (root or under a base path) ---
+                const base =
+                    (listFoldersInMatch ? listFoldersInMatch[3] : '').trim().replace(/^\/+|\/+$/g, '') || undefined;
+                const folders = await tryListFolders(base);
+
+                assistantMsg = folders && folders.length
+                    ? {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: base ? `Folders under "${base}":` : 'Folders:',
+                        assets: folders,
+                    }
+                    : {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: 'No folders found.',
+                    };
+
+            } else if (wantList) {
+                // --- List recent images ---
                 const res = await client.callTool({ name: 'list-images', arguments: {} });
                 const assets = toAssetsFromContent(res?.content || []);
                 assistantMsg = {
@@ -81,6 +269,7 @@ export async function sendMessageAction(
                 };
 
             } else if (renameLastMatch && lastAssetId) {
+                // Rename above
                 const from_public_id = lastAssetId;
                 const to_public_id = renameLastMatch[1].trim();
                 const res = await client.callTool({
@@ -90,10 +279,20 @@ export async function sendMessageAction(
 
                 const renamedAsset = parseUploadResult(res?.content);
                 assistantMsg = renamedAsset
-                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Successfully renamed asset to "${to_public_id}".`, assets: [renamedAsset] }
-                    : { id: crypto.randomUUID(), role: 'assistant', text: `Could not rename asset. The ID "${from_public_id}" may no longer be valid.` };
+                    ? {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Successfully renamed asset to "${to_public_id}".`,
+                        assets: [renamedAsset],
+                    }
+                    : {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Could not rename asset. The ID "${from_public_id}" may no longer be valid.`,
+                    };
 
             } else if (deleteLastMatch && lastAssetId) {
+                // Delete above
                 const public_id = normalizePublicId(lastAssetId);
                 const toolNames = await listToolNames(client);
                 const bulkTool = toolNames.find((n) =>
@@ -128,6 +327,7 @@ export async function sendMessageAction(
                     : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to delete "${public_id}". It may not exist.` };
 
             } else if (tagLastMatch && lastAssetId) {
+                // Tag above
                 const public_id = normalizePublicId(lastAssetId);
                 const tagsCsv = normalizeTagsCSV(tagLastMatch[1]);
                 const toolNames = await listToolNames(client);
@@ -136,12 +336,15 @@ export async function sendMessageAction(
                 );
 
                 let ok = false;
+                let updatedAsset = undefined;
+
                 if (updateByPid) {
                     const res = await client.callTool({
                         name: updateByPid,
                         arguments: { resourceType: 'image', request: { public_id, type: 'upload', tags: tagsCsv } },
                     });
                     ok = parseUpdateSuccess(res?.content);
+                    updatedAsset = parseUploadResult(res?.content) || undefined;
                 } else {
                     const assetId = await getAssetIdByPublicId(client, public_id);
                     if (assetId) {
@@ -150,14 +353,21 @@ export async function sendMessageAction(
                             arguments: { assetId, resourceUpdateRequest: { tags: tagsCsv } },
                         });
                         ok = parseUpdateSuccess(res?.content);
+                        updatedAsset = parseUploadResult(res?.content) || undefined;
                     }
                 }
 
                 assistantMsg = ok
-                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Tagged ${public_id} with: ${tagsCsv}` }
+                    ? {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Tagged ${public_id} with: ${tagsCsv}`,
+                        assets: updatedAsset ? [updatedAsset] : undefined,
+                    }
                     : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to tag "${public_id}".` };
 
             } else if (renameMatch) {
+                // Rename direct
                 const from_public_id = normalizePublicId(renameMatch[1].trim());
                 const to_public_id = normalizePublicId(renameMatch[2].trim());
                 const res = await client.callTool({
@@ -167,10 +377,20 @@ export async function sendMessageAction(
 
                 const renamedAsset = parseUploadResult(res?.content);
                 assistantMsg = renamedAsset
-                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Successfully renamed asset to "${to_public_id}".`, assets: [renamedAsset] }
-                    : { id: crypto.randomUUID(), role: 'assistant', text: `Could not rename asset. Please ensure the public ID "${from_public_id}" exists.` };
+                    ? {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Successfully renamed asset to "${to_public_id}".`,
+                        assets: [renamedAsset],
+                    }
+                    : {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Could not rename asset. Please ensure the public ID "${from_public_id}" exists.`,
+                    };
 
             } else if (deleteMatch) {
+                // Delete direct
                 const public_id = normalizePublicId(deleteMatch[1].trim());
                 const toolNames = await listToolNames(client);
                 const bulkTool = toolNames.find((n) =>
@@ -205,6 +425,7 @@ export async function sendMessageAction(
                     : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to delete "${public_id}". Please check the ID.` };
 
             } else if (tagMatch) {
+                // Tag direct
                 const public_id = normalizePublicId(tagMatch[1].trim());
                 const tagsCsv = normalizeTagsCSV(tagMatch[2]);
                 const toolNames = await listToolNames(client);
@@ -213,12 +434,15 @@ export async function sendMessageAction(
                 );
 
                 let ok = false;
+                let updatedAsset = undefined;
+
                 if (updateByPid) {
                     const res = await client.callTool({
                         name: updateByPid,
                         arguments: { resourceType: 'image', request: { public_id, type: 'upload', tags: tagsCsv } },
                     });
                     ok = parseUpdateSuccess(res?.content);
+                    updatedAsset = parseUploadResult(res?.content) || undefined;
                 } else {
                     const assetId = await getAssetIdByPublicId(client, public_id);
                     if (assetId) {
@@ -227,15 +451,21 @@ export async function sendMessageAction(
                             arguments: { assetId, resourceUpdateRequest: { tags: tagsCsv } },
                         });
                         ok = parseUpdateSuccess(res?.content);
+                        updatedAsset = parseUploadResult(res?.content) || undefined;
                     }
                 }
 
                 assistantMsg = ok
-                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Tagged ${public_id} with: ${tagsCsv}` }
+                    ? {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Tagged ${public_id} with: ${tagsCsv}`,
+                        assets: updatedAsset ? [updatedAsset] : undefined,
+                    }
                     : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to tag "${public_id}".` };
 
             } else if (createFolderMatch) {
-                // create folder
+                // Create folder
                 const folderPath = createFolderMatch[2].trim().replace(/^\/+|\/+$/g, '');
                 const toolNames = await listToolNames(client);
                 const createTool = toolNames.find((n) =>
@@ -251,7 +481,7 @@ export async function sendMessageAction(
                 } else {
                     let ok = false;
 
-                    // Preferred shape: { folder: "<path>" }
+                    // Preferred shape
                     try {
                         const res = await client.callTool({
                             name: createTool,
@@ -285,7 +515,7 @@ export async function sendMessageAction(
                 }
 
             } else if (moveLastMatch && lastAssetId) {
-                // move the above image to <folder>
+                // Move above
                 const folder = moveLastMatch[1].trim();
                 const from_public_id = normalizePublicId(lastAssetId);
                 const to_public_id = buildMoveTarget(folder, from_public_id);
@@ -297,11 +527,16 @@ export async function sendMessageAction(
 
                 const moved = parseUploadResult(res?.content);
                 assistantMsg = moved
-                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Moved to "${folder}".`, assets: [moved] }
+                    ? {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Moved to "${folder}".`,
+                        assets: [moved],
+                    }
                     : { id: crypto.randomUUID(), role: 'assistant', text: 'Failed to move asset.' };
 
             } else if (moveMatch) {
-                // move <public_id> to <folder>
+                // Move direct
                 const from_public_id = normalizePublicId(moveMatch[1].trim());
                 const folder = moveMatch[2].trim();
                 const to_public_id = buildMoveTarget(folder, from_public_id);
@@ -313,10 +548,16 @@ export async function sendMessageAction(
 
                 const moved = parseUploadResult(res?.content);
                 assistantMsg = moved
-                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Moved to "${folder}".`, assets: [moved] }
+                    ? {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: `Moved to "${folder}".`,
+                        assets: [moved],
+                    }
                     : { id: crypto.randomUUID(), role: 'assistant', text: 'Failed to move asset.' };
 
             } else {
+                // Help
                 const tools = await listToolNames(client);
                 assistantMsg = {
                     id: crypto.randomUUID(),

@@ -10,6 +10,8 @@ export type AssetItem = {
     format?: string;
     width?: number;
     height?: number;
+    resourceType?: 'image' | 'video' | 'raw';
+    tags?: string[];
 };
 
 // Represents a single message in the chat UI.
