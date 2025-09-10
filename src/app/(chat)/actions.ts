@@ -1,6 +1,6 @@
 'use server';
 
-import { ChatMessage, MCPClient, CallToolResult, } from '@/types';
+import { ChatMessage, MCPClient, CallToolResult } from '@/types';
 import { connectCloudinary } from '@/lib/mcp-client';
 import { toAssetsFromContent, parseUploadResult } from '@/lib/mcp-utils';
 import {
@@ -8,6 +8,10 @@ import {
     parseDeleteSuccess,
     extractAssetIdFromList,
     listToolNames,
+    // tagging helpers
+    normalizeTagsCSV,
+    getAssetIdByPublicId,
+    parseUpdateSuccess,
 } from '@/lib/action-helpers';
 
 export async function sendMessageAction(
@@ -50,11 +54,14 @@ export async function sendMessageAction(
                 assets: uploaded ? [uploaded] : undefined,
             };
         } else {
-            const wantList = /^(list|show)\s+(images|pics|photos?)$/i.test(text) || /^images?$/i.test(text);
+            const wantList =
+                /^(list|show)\s+(images|pics|photos?)$/i.test(text) || /^images?$/i.test(text);
             const renameLastMatch = text.match(/^rename the above image to\s+(.+)$/i);
             const renameMatch = text.match(/^rename\s+(.+?)\s+to\s+(.+)$/i);
             const deleteLastMatch = text.match(/^delete the above image$/i);
             const deleteMatch = text.match(/^delete\s+(.+)$/i);
+            const tagLastMatch = text.match(/^tag the above image with\s+(.+)$/i);
+            const tagMatch = text.match(/^tag\s+(.+?)\s+with\s+(.+)$/i);
 
             if (wantList) {
                 const res = await client.callTool({ name: 'list-images', arguments: {} });
@@ -65,6 +72,7 @@ export async function sendMessageAction(
                     text: assets?.length ? 'Here are your latest images:' : 'No images found.',
                     assets: assets ?? undefined,
                 };
+
             } else if (renameLastMatch && lastAssetId) {
                 const from_public_id = lastAssetId;
                 const to_public_id = renameLastMatch[1].trim();
@@ -81,18 +89,30 @@ export async function sendMessageAction(
             } else if (deleteLastMatch && lastAssetId) {
                 const public_id = normalizePublicId(lastAssetId);
                 const toolNames = await listToolNames(client);
-                const bulkTool = toolNames.find((n) => ['assets-delete-resources-by-public-id', 'delete-resources-by-public-id', 'assets-delete'].includes(n));
+                const bulkTool = toolNames.find((n) =>
+                    ['assets-delete-resources-by-public-id', 'delete-resources-by-public-id', 'assets-delete'].includes(n),
+                );
                 let res: CallToolResult | undefined;
 
                 if (bulkTool) {
-                    res = await client.callTool({ name: bulkTool, arguments: { resourceType: 'image', request: { public_ids: [public_id], type: 'upload' } } });
+                    res = await client.callTool({
+                        name: bulkTool,
+                        arguments: { resourceType: 'image', request: { public_ids: [public_id], type: 'upload' } },
+                    });
                 } else {
                     const listRes = await client.callTool({ name: 'list-images', arguments: {} });
                     const assetId = extractAssetIdFromList(listRes?.content, public_id);
                     if (!assetId) {
-                        return [...currentState, userMessage, { id: crypto.randomUUID(), role: 'assistant', text: `Could not find asset_id for "${public_id}".` }];
+                        return [
+                            ...currentState,
+                            userMessage,
+                            { id: crypto.randomUUID(), role: 'assistant', text: `Could not find asset_id for "${public_id}".` },
+                        ];
                     }
-                    res = await client.callTool({ name: 'delete-asset', arguments: { resourceType: 'image', request: { asset_id: assetId, invalidate: true } } });
+                    res = await client.callTool({
+                        name: 'delete-asset',
+                        arguments: { resourceType: 'image', request: { asset_id: assetId, invalidate: true } },
+                    });
                 }
 
                 const ok = parseDeleteSuccess(res?.content, public_id);
@@ -100,10 +120,45 @@ export async function sendMessageAction(
                     ? { id: crypto.randomUUID(), role: 'assistant', text: `Deleted ${public_id}.` }
                     : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to delete "${public_id}". It may not exist.` };
 
+            } else if (tagLastMatch && lastAssetId) {
+                // tag the above image with X
+                const public_id = normalizePublicId(lastAssetId);
+                const tagsCsv = normalizeTagsCSV(tagLastMatch[1]);
+                const toolNames = await listToolNames(client);
+                const updateByPid = toolNames.find((n) =>
+                    ['update-resource-by-public-id', 'assets-update-resource-by-public-id'].includes(n),
+                );
+
+                let ok = false;
+
+                if (updateByPid) {
+                    const res = await client.callTool({
+                        name: updateByPid,
+                        arguments: { resourceType: 'image', request: { public_id, type: 'upload', tags: tagsCsv } },
+                    });
+                    ok = parseUpdateSuccess(res?.content);
+                } else {
+                    const assetId = await getAssetIdByPublicId(client, public_id);
+                    if (assetId) {
+                        const res = await client.callTool({
+                            name: 'asset-update',
+                            arguments: { assetId, resourceUpdateRequest: { tags: tagsCsv } },
+                        });
+                        ok = parseUpdateSuccess(res?.content);
+                    }
+                }
+
+                assistantMsg = ok
+                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Tagged ${public_id} with: ${tagsCsv}` }
+                    : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to tag "${public_id}".` };
+
             } else if (renameMatch) {
                 const from_public_id = normalizePublicId(renameMatch[1].trim());
                 const to_public_id = normalizePublicId(renameMatch[2].trim());
-                const res = await client.callTool({ name: 'asset-rename', arguments: { resourceType: 'image', requestBody: { from_public_id, to_public_id } } });
+                const res = await client.callTool({
+                    name: 'asset-rename',
+                    arguments: { resourceType: 'image', requestBody: { from_public_id, to_public_id } },
+                });
 
                 const renamedAsset = parseUploadResult(res?.content);
                 assistantMsg = renamedAsset
@@ -113,24 +168,68 @@ export async function sendMessageAction(
             } else if (deleteMatch) {
                 const public_id = normalizePublicId(deleteMatch[1].trim());
                 const toolNames = await listToolNames(client);
-                const bulkTool = toolNames.find((n) => ['assets-delete-resources-by-public-id', 'delete-resources-by-public-id', 'assets-delete'].includes(n));
+                const bulkTool = toolNames.find((n) =>
+                    ['assets-delete-resources-by-public-id', 'delete-resources-by-public-id', 'assets-delete'].includes(n),
+                );
                 let res: CallToolResult | undefined;
 
                 if (bulkTool) {
-                    res = await client.callTool({ name: bulkTool, arguments: { resourceType: 'image', request: { public_ids: [public_id], type: 'upload' } } });
+                    res = await client.callTool({
+                        name: bulkTool,
+                        arguments: { resourceType: 'image', request: { public_ids: [public_id], type: 'upload' } },
+                    });
                 } else {
                     const listRes = await client.callTool({ name: 'list-images', arguments: {} });
                     const assetId = extractAssetIdFromList(listRes?.content, public_id);
                     if (!assetId) {
-                        return [...currentState, userMessage, { id: crypto.randomUUID(), role: 'assistant', text: `Could not find asset_id for "${public_id}". Check the ID.` }];
+                        return [
+                            ...currentState,
+                            userMessage,
+                            { id: crypto.randomUUID(), role: 'assistant', text: `Could not find asset_id for "${public_id}". Check the ID.` },
+                        ];
                     }
-                    res = await client.callTool({ name: 'delete-asset', arguments: { resourceType: 'image', request: { asset_id: assetId, invalidate: true } } });
+                    res = await client.callTool({
+                        name: 'delete-asset',
+                        arguments: { resourceType: 'image', request: { asset_id: assetId, invalidate: true } },
+                    });
                 }
 
                 const ok = parseDeleteSuccess(res?.content, public_id);
                 assistantMsg = ok
                     ? { id: crypto.randomUUID(), role: 'assistant', text: `Deleted ${public_id}.` }
                     : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to delete "${public_id}". Please check the ID.` };
+
+            } else if (tagMatch) {
+                // tag <public_id> with X
+                const public_id = normalizePublicId(tagMatch[1].trim());
+                const tagsCsv = normalizeTagsCSV(tagMatch[2]);
+                const toolNames = await listToolNames(client);
+                const updateByPid = toolNames.find((n) =>
+                    ['update-resource-by-public-id', 'assets-update-resource-by-public-id'].includes(n),
+                );
+
+                let ok = false;
+
+                if (updateByPid) {
+                    const res = await client.callTool({
+                        name: updateByPid,
+                        arguments: { resourceType: 'image', request: { public_id, type: 'upload', tags: tagsCsv } },
+                    });
+                    ok = parseUpdateSuccess(res?.content);
+                } else {
+                    const assetId = await getAssetIdByPublicId(client, public_id);
+                    if (assetId) {
+                        const res = await client.callTool({
+                            name: 'asset-update',
+                            arguments: { assetId, resourceUpdateRequest: { tags: tagsCsv } },
+                        });
+                        ok = parseUpdateSuccess(res?.content);
+                    }
+                }
+
+                assistantMsg = ok
+                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Tagged ${public_id} with: ${tagsCsv}` }
+                    : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to tag "${public_id}".` };
 
             } else {
                 const tools = await listToolNames(client);
@@ -153,7 +252,7 @@ export async function sendMessageAction(
         };
         return [...currentState, userMessage, errorMsg];
     } finally {
-        if (typeof client?.close === 'function') {
+        if (client && typeof client.close === 'function') {
             client.close();
         }
     }
