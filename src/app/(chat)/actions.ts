@@ -8,10 +8,11 @@ import {
     parseDeleteSuccess,
     extractAssetIdFromList,
     listToolNames,
-    // tagging helpers
     normalizeTagsCSV,
     getAssetIdByPublicId,
     parseUpdateSuccess,
+    buildMoveTarget,
+    parseCreateFolderSuccess,
 } from '@/lib/action-helpers';
 
 export async function sendMessageAction(
@@ -60,8 +61,14 @@ export async function sendMessageAction(
             const renameMatch = text.match(/^rename\s+(.+?)\s+to\s+(.+)$/i);
             const deleteLastMatch = text.match(/^delete the above image$/i);
             const deleteMatch = text.match(/^delete\s+(.+)$/i);
+
             const tagLastMatch = text.match(/^tag the above image with\s+(.+)$/i);
             const tagMatch = text.match(/^tag\s+(.+?)\s+with\s+(.+)$/i);
+
+            // Folder commands
+            const createFolderMatch = text.match(/^(create|make)\s+folder\s+(.+)$/i);
+            const moveLastMatch = text.match(/^move the above image to\s+(.+)$/i);
+            const moveMatch = text.match(/^move\s+(.+?)\s+to\s+(.+)$/i);
 
             if (wantList) {
                 const res = await client.callTool({ name: 'list-images', arguments: {} });
@@ -121,7 +128,6 @@ export async function sendMessageAction(
                     : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to delete "${public_id}". It may not exist.` };
 
             } else if (tagLastMatch && lastAssetId) {
-                // tag the above image with X
                 const public_id = normalizePublicId(lastAssetId);
                 const tagsCsv = normalizeTagsCSV(tagLastMatch[1]);
                 const toolNames = await listToolNames(client);
@@ -130,7 +136,6 @@ export async function sendMessageAction(
                 );
 
                 let ok = false;
-
                 if (updateByPid) {
                     const res = await client.callTool({
                         name: updateByPid,
@@ -200,7 +205,6 @@ export async function sendMessageAction(
                     : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to delete "${public_id}". Please check the ID.` };
 
             } else if (tagMatch) {
-                // tag <public_id> with X
                 const public_id = normalizePublicId(tagMatch[1].trim());
                 const tagsCsv = normalizeTagsCSV(tagMatch[2]);
                 const toolNames = await listToolNames(client);
@@ -209,7 +213,6 @@ export async function sendMessageAction(
                 );
 
                 let ok = false;
-
                 if (updateByPid) {
                     const res = await client.callTool({
                         name: updateByPid,
@@ -230,6 +233,88 @@ export async function sendMessageAction(
                 assistantMsg = ok
                     ? { id: crypto.randomUUID(), role: 'assistant', text: `Tagged ${public_id} with: ${tagsCsv}` }
                     : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to tag "${public_id}".` };
+
+            } else if (createFolderMatch) {
+                // create folder
+                const folderPath = createFolderMatch[2].trim().replace(/^\/+|\/+$/g, '');
+                const toolNames = await listToolNames(client);
+                const createTool = toolNames.find((n) =>
+                    ['create-folder', 'folders-create-folder'].includes(n),
+                );
+
+                if (!createTool) {
+                    assistantMsg = {
+                        id: crypto.randomUUID(),
+                        role: 'assistant',
+                        text: 'No create-folder tool is available.',
+                    };
+                } else {
+                    let ok = false;
+
+                    // Preferred shape: { folder: "<path>" }
+                    try {
+                        const res = await client.callTool({
+                            name: createTool,
+                            arguments: { folder: folderPath },
+                        });
+                        ok = parseCreateFolderSuccess(res?.content);
+                    } catch {
+                        // Fallbacks
+                        try {
+                            const res2 = await client.callTool({
+                                name: createTool,
+                                arguments: { request: { folder: folderPath } },
+                            });
+                            ok = parseCreateFolderSuccess(res2?.content);
+                        } catch {
+                            try {
+                                const res3 = await client.callTool({
+                                    name: createTool,
+                                    arguments: { requestBody: { folder: folderPath } },
+                                });
+                                ok = parseCreateFolderSuccess(res3?.content);
+                            } catch {
+                                ok = false;
+                            }
+                        }
+                    }
+
+                    assistantMsg = ok
+                        ? { id: crypto.randomUUID(), role: 'assistant', text: `Created folder "${folderPath}".` }
+                        : { id: crypto.randomUUID(), role: 'assistant', text: `Failed to create folder "${folderPath}".` };
+                }
+
+            } else if (moveLastMatch && lastAssetId) {
+                // move the above image to <folder>
+                const folder = moveLastMatch[1].trim();
+                const from_public_id = normalizePublicId(lastAssetId);
+                const to_public_id = buildMoveTarget(folder, from_public_id);
+
+                const res = await client.callTool({
+                    name: 'asset-rename',
+                    arguments: { resourceType: 'image', requestBody: { from_public_id, to_public_id } },
+                });
+
+                const moved = parseUploadResult(res?.content);
+                assistantMsg = moved
+                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Moved to "${folder}".`, assets: [moved] }
+                    : { id: crypto.randomUUID(), role: 'assistant', text: 'Failed to move asset.' };
+
+            } else if (moveMatch) {
+                // move <public_id> to <folder>
+                const from_public_id = normalizePublicId(moveMatch[1].trim());
+                const folder = moveMatch[2].trim();
+                const to_public_id = buildMoveTarget(folder, from_public_id);
+
+                const res = await client.callTool({
+                    name: 'asset-rename',
+                    arguments: { resourceType: 'image', requestBody: { from_public_id, to_public_id } },
+                });
+
+                const moved = parseUploadResult(res?.content);
+                assistantMsg = moved
+                    ? { id: crypto.randomUUID(), role: 'assistant', text: `Moved to "${folder}".`, assets: [moved] }
+                    : { id: crypto.randomUUID(), role: 'assistant', text: 'Failed to move asset.' };
 
             } else {
                 const tools = await listToolNames(client);

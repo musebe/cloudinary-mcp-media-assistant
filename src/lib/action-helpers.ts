@@ -39,15 +39,29 @@ export function normalizePublicId(id: string) {
 export function parseDeleteSuccess(content?: ToolContent[], publicId?: string): boolean {
     const json = getJson(content);
     if (json && isObject(json)) {
-        if (json.result === 'ok') return true;
-        if (publicId && isObject(json.deleted) && json.deleted[publicId] === 'deleted') return true;
+        if ((json as Record<string, unknown>).result === 'ok') return true;
+        if (
+            publicId &&
+            isObject((json as Record<string, unknown>).deleted) &&
+            (isObject((json as Record<string, unknown>).deleted) &&
+                (json as { deleted: Record<string, unknown> }).deleted[publicId] === 'deleted')
+        ) {
+            return true;
+        }
     }
     const text = getText(content);
     if (text) {
         try {
             const parsed = JSON.parse(text) as Record<string, unknown>;
             if (parsed.result === 'ok') return true;
-            if (publicId && isObject(parsed.deleted) && parsed.deleted[publicId] === 'deleted') return true;
+            if (
+                publicId &&
+                isObject(parsed.deleted) &&
+                typeof (parsed.deleted as Record<string, unknown>)[publicId] === 'string' &&
+                (parsed.deleted as Record<string, unknown>)[publicId] === 'deleted'
+            ) {
+                return true;
+            }
         } catch {
             if (/\bdeleted\b/i.test(text) || /\bresult\b.*\bok\b/i.test(text)) return true;
         }
@@ -55,14 +69,16 @@ export function parseDeleteSuccess(content?: ToolContent[], publicId?: string): 
     return false;
 }
 
-export function extractAssetIdFromList(content: ToolContent[] | undefined, publicId: string): string | undefined {
+export function extractAssetIdFromList(
+    content: ToolContent[] | undefined,
+    publicId: string,
+): string | undefined {
     const from = (data: unknown): string | undefined => {
         if (!isObject(data)) return undefined;
+        const obj = data as Record<string, unknown>;
         const list =
-            (Array.isArray((data as Record<string, unknown>).resources) &&
-                ((data as Record<string, unknown>).resources as unknown[])) ||
-            (Array.isArray((data as Record<string, unknown>).items) &&
-                ((data as Record<string, unknown>).items as unknown[])) ||
+            (Array.isArray(obj.resources) && (obj.resources as unknown[])) ||
+            (Array.isArray(obj.items) && (obj.items as unknown[])) ||
             [];
         for (const it of list) {
             if (!isObject(it)) continue;
@@ -108,8 +124,8 @@ export async function listToolNames(client: MCPClient): Promise<string[]> {
 export function normalizeTagsCSV(s: string): string {
     return s
         .split(/[,\n]/)
-        .flatMap(chunk => chunk.split(' '))
-        .map(t => t.trim())
+        .flatMap((chunk) => chunk.split(' '))
+        .map((t) => t.trim())
         .filter(Boolean)
         .join(',');
 }
@@ -117,13 +133,12 @@ export function normalizeTagsCSV(s: string): string {
 // Try to resolve asset_id for a given public_id
 export async function getAssetIdByPublicId(
     client: MCPClient,
-    publicId: string
+    publicId: string,
 ): Promise<string | undefined> {
-    // Prefer a direct lookup tool if available
     const tools = await client.listTools?.();
-    const names = tools?.tools?.map(t => t.name) ?? [];
-    const byPid = names.find(n =>
-        ['get-resource-by-public-id', 'assets-get-resource-by-public-id'].includes(n)
+    const names = tools?.tools?.map((t) => t.name) ?? [];
+    const byPid = names.find((n) =>
+        ['get-resource-by-public-id', 'assets-get-resource-by-public-id'].includes(n),
     );
 
     if (byPid) {
@@ -133,7 +148,9 @@ export async function getAssetIdByPublicId(
         });
 
         const j = getJson(res?.content);
-        if (j && isObject(j) && typeof j.asset_id === 'string') return j.asset_id;
+        if (j && isObject(j) && typeof (j as Record<string, unknown>).asset_id === 'string') {
+            return (j as Record<string, string>).asset_id;
+        }
 
         const t = getText(res?.content);
         if (t) {
@@ -146,7 +163,6 @@ export async function getAssetIdByPublicId(
         }
     }
 
-    // Fallback to scanning list output
     const listRes = await client.callTool({ name: 'list-images', arguments: {} });
     return extractAssetIdFromList(listRes?.content, publicId);
 }
@@ -155,9 +171,10 @@ export async function getAssetIdByPublicId(
 export function parseUpdateSuccess(content?: ToolContent[]): boolean {
     const j = getJson(content);
     if (j && isObject(j)) {
-        if (j.result === 'ok') return true;
-        if (Array.isArray(j.tags) || typeof j.tags === 'string') return true;
-        if (typeof j.public_id === 'string') return true;
+        const o = j as Record<string, unknown>;
+        if (o.result === 'ok') return true;
+        if (Array.isArray(o.tags) || typeof o.tags === 'string') return true;
+        if (typeof o.public_id === 'string') return true;
     }
     const t = getText(content);
     if (t) {
@@ -169,6 +186,40 @@ export function parseUpdateSuccess(content?: ToolContent[]): boolean {
         } catch {
             if (/\bresult\b.*\bok\b/i.test(t)) return true;
             if (/\btags\b/i.test(t) || /\bpublic_id\b/i.test(t)) return true;
+        }
+    }
+    return false;
+}
+
+// Join folder and basename of a public_id
+export function baseNameFromPublicId(pid: string): string {
+    const clean = pid.replace(/\.[^/.]+$/i, '');
+    const parts = clean.split('/');
+    return parts[parts.length - 1] || clean;
+}
+
+export function buildMoveTarget(folder: string, publicId: string): string {
+    const f = folder.replace(/^\/+|\/+$/g, '');
+    return `${f}/${baseNameFromPublicId(publicId)}`;
+}
+
+export function parseCreateFolderSuccess(content?: ToolContent[]): boolean {
+    const j = getJson(content);
+    if (j && isObject(j)) {
+        const o = j as Record<string, unknown>;
+        if (o.result === 'ok') return true;
+        if (o.success === true) return true;
+        if (typeof o.path === 'string' || typeof o.name === 'string') return true;
+    }
+    const t = getText(content);
+    if (t) {
+        try {
+            const p = JSON.parse(t) as Record<string, unknown>;
+            if (p.result === 'ok' || p.success === true) return true;
+            if (typeof p.path === 'string' || typeof p.name === 'string') return true;
+        } catch {
+            if (/\bresult\b.*\bok\b/i.test(t) || /\bsuccess\b\s*:\s*true/i.test(t)) return true;
+            if (/\bpath\b/i.test(t) || /\bname\b/i.test(t)) return true;
         }
     }
     return false;
