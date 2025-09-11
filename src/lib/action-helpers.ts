@@ -1,6 +1,11 @@
+// src/lib/action-helpers.ts
+
 import { ToolContent, JSONPart, TextPart, MCPClient } from '@/types';
 
-// Type Guards
+/* ------------------------------------------------------------------ */
+/* Type guards                                                         */
+/* ------------------------------------------------------------------ */
+
 export function isObject(v: unknown): v is Record<string, unknown> {
     return typeof v === 'object' && v !== null;
 }
@@ -13,7 +18,10 @@ export function isTextPartLocal(p: ToolContent): p is TextPart {
     return isObject(p) && 'type' in p && (p as { type?: unknown }).type === 'text' && 'text' in p;
 }
 
-// Content Parsers
+/* ------------------------------------------------------------------ */
+/* Content extractors                                                  */
+/* ------------------------------------------------------------------ */
+
 export function getJson(content?: ToolContent[]): unknown | undefined {
     if (!content) return undefined;
     const part = content.find(isJSONPartLocal);
@@ -26,7 +34,10 @@ export function getText(content?: ToolContent[]): string | undefined {
     return part?.text;
 }
 
-// Utility Functions
+/* ------------------------------------------------------------------ */
+/* Public ID helpers                                                   */
+/* ------------------------------------------------------------------ */
+
 export function normalizePublicId(id: string) {
     if (!id) return id;
     const parts = id.split('/');
@@ -36,30 +47,40 @@ export function normalizePublicId(id: string) {
     return parts.join('/');
 }
 
+export function baseNameFromPublicId(pid: string): string {
+    const clean = pid.replace(/\.[^/.]+$/i, '');
+    const parts = clean.split('/');
+    return parts[parts.length - 1] || clean;
+}
+
+export function buildMoveTarget(folder: string, publicId: string): string {
+    const f = folder.replace(/^\/+|\/+$/g, '');
+    return `${f}/${baseNameFromPublicId(publicId)}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Delete success parsing                                              */
+/* ------------------------------------------------------------------ */
+
 export function parseDeleteSuccess(content?: ToolContent[], publicId?: string): boolean {
     const json = getJson(content);
     if (json && isObject(json)) {
         if ((json as Record<string, unknown>).result === 'ok') return true;
-        if (
-            publicId &&
-            isObject((json as Record<string, unknown>).deleted) &&
-            (isObject((json as Record<string, unknown>).deleted) &&
-                (json as { deleted: Record<string, unknown> }).deleted[publicId] === 'deleted')
-        ) {
+
+        const deleted = (json as { deleted?: Record<string, unknown> }).deleted;
+        if (publicId && deleted && isObject(deleted) && deleted[publicId] === 'deleted') {
             return true;
         }
     }
+
     const text = getText(content);
     if (text) {
         try {
             const parsed = JSON.parse(text) as Record<string, unknown>;
             if (parsed.result === 'ok') return true;
-            if (
-                publicId &&
-                isObject(parsed.deleted) &&
-                typeof (parsed.deleted as Record<string, unknown>)[publicId] === 'string' &&
-                (parsed.deleted as Record<string, unknown>)[publicId] === 'deleted'
-            ) {
+
+            const deleted = parsed.deleted as Record<string, unknown> | undefined;
+            if (publicId && deleted && deleted[publicId] === 'deleted') {
                 return true;
             }
         } catch {
@@ -68,6 +89,10 @@ export function parseDeleteSuccess(content?: ToolContent[], publicId?: string): 
     }
     return false;
 }
+
+/* ------------------------------------------------------------------ */
+/* Extract asset_id from list                                          */
+/* ------------------------------------------------------------------ */
 
 export function extractAssetIdFromList(
     content: ToolContent[] | undefined,
@@ -113,14 +138,20 @@ export function extractAssetIdFromList(
     return undefined;
 }
 
+/* ------------------------------------------------------------------ */
+/* Tool listing                                                        */
+/* ------------------------------------------------------------------ */
+
 export async function listToolNames(client: MCPClient): Promise<string[]> {
     const tools = await client.listTools?.();
     return tools?.tools?.map((t) => t.name) ?? [];
 }
 
-/* ---------- Tagging helpers ---------- */
+/* ------------------------------------------------------------------ */
+/* Tagging helpers                                                     */
+/* ------------------------------------------------------------------ */
 
-// Accepts "tag1, tag2 tag3" and returns "tag1,tag2,tag3"
+/** Accepts "tag1, tag2 tag3" and returns "tag1,tag2,tag3" */
 export function normalizeTagsCSV(s: string): string {
     return s
         .split(/[,\n]/)
@@ -130,7 +161,7 @@ export function normalizeTagsCSV(s: string): string {
         .join(',');
 }
 
-// Try to resolve asset_id for a given public_id
+/** Try to resolve asset_id for a given public_id via tool or list fallback */
 export async function getAssetIdByPublicId(
     client: MCPClient,
     publicId: string,
@@ -167,7 +198,10 @@ export async function getAssetIdByPublicId(
     return extractAssetIdFromList(listRes?.content, publicId);
 }
 
-// Treat common update responses as success
+/* ------------------------------------------------------------------ */
+/* Update success parsing                                              */
+/* ------------------------------------------------------------------ */
+
 export function parseUpdateSuccess(content?: ToolContent[]): boolean {
     const j = getJson(content);
     if (j && isObject(j)) {
@@ -191,17 +225,9 @@ export function parseUpdateSuccess(content?: ToolContent[]): boolean {
     return false;
 }
 
-// Join folder and basename of a public_id
-export function baseNameFromPublicId(pid: string): string {
-    const clean = pid.replace(/\.[^/.]+$/i, '');
-    const parts = clean.split('/');
-    return parts[parts.length - 1] || clean;
-}
-
-export function buildMoveTarget(folder: string, publicId: string): string {
-    const f = folder.replace(/^\/+|\/+$/g, '');
-    return `${f}/${baseNameFromPublicId(publicId)}`;
-}
+/* ------------------------------------------------------------------ */
+/* Create-folder success parsing                                       */
+/* ------------------------------------------------------------------ */
 
 export function parseCreateFolderSuccess(content?: ToolContent[]): boolean {
     const j = getJson(content);
@@ -225,6 +251,10 @@ export function parseCreateFolderSuccess(content?: ToolContent[]): boolean {
     return false;
 }
 
+/* ------------------------------------------------------------------ */
+/* Folders extraction                                                  */
+/* ------------------------------------------------------------------ */
+
 export function parseFoldersFromContent(content?: ToolContent[]): string[] {
     const out: string[] = [];
     const from = (data: unknown) => {
@@ -235,7 +265,7 @@ export function parseFoldersFromContent(content?: ToolContent[]): string[] {
             (Array.isArray(o.items) && (o.items as unknown[])) ||
             [];
         for (const it of arr) {
-            if (!it || typeof it !== 'object') continue;
+            if (!isObject(it)) continue;
             const r = it as Record<string, unknown>;
             const name =
                 (typeof r.path === 'string' && r.path) ||

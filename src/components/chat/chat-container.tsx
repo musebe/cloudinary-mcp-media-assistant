@@ -1,3 +1,5 @@
+// src/components/chat/chat-container.tsx
+
 'use client';
 
 // ✨ Add useState and useEffect

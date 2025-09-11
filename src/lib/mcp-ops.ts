@@ -15,6 +15,9 @@ import { toAssetsFromContent, parseUploadResult } from '@/lib/mcp-utils';
 /* Generic tool utilities                                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Pick a tool by exact name (preferred) or fuzzy regex.
+ */
 export async function pickTool(
     client: MCPClient,
     exactNames: string[],
@@ -27,6 +30,9 @@ export async function pickTool(
     );
 }
 
+/**
+ * Call a tool trying common argument envelope shapes.
+ */
 export async function callWithShapes(
     client: MCPClient,
     name: string,

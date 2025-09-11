@@ -2,6 +2,6 @@
 // Docs: https://cloudinary.com/documentation/cloudinary_llm_mcp
 
 export const cloudinaryServers = [
-    { name: "asset-management", url: "http://localhost:8787/sse" },
+    { name: 'asset-management', url: process.env.CLOUDINARY_MCP_URL ?? 'http://localhost:8787/sse' },
 ];
 

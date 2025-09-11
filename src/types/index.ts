@@ -14,6 +14,15 @@ export type AssetItem = {
     tags?: string[];
 };
 
+export type GuideInput = {
+    userText: string;
+    defaultText: string;        // what we’d say without AI
+    intent?: string;            // e.g., "list-images", "rename", "help"
+    assetsCount?: number;       // when we listed/returned assets
+    extraTips?: string[];       // optional quick tips to sprinkle in
+};
+
+
 // Represents a single message in the chat UI.
 export type ChatMessage = {
     id: string;
