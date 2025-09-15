@@ -11,6 +11,24 @@ import {
 } from '@/lib/action-helpers';
 import { toAssetsFromContent, parseUploadResult } from '@/lib/mcp-utils';
 
+interface ContentItem {
+    type: string;
+    text?: string;
+    json?: unknown;
+}
+
+function readError(content?: ContentItem[]): string | undefined {
+    if (!content) return;
+    const t = content.find((p: ContentItem) => p?.type === 'text' && typeof p.text === 'string');
+    if (t?.text) return t.text;
+    const j = content.find((p: ContentItem) => p?.type === 'json' && p.json);
+    if (j?.json && typeof j.json === 'object') {
+        const jsonObj = j.json as Record<string, unknown>;
+        const m = jsonObj.message || jsonObj.error || jsonObj.err;
+        if (typeof m === 'string') return m;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Generic tool utilities                                             */
 /* ------------------------------------------------------------------ */
@@ -59,7 +77,11 @@ export async function callWithShapes(
 /* ------------------------------------------------------------------ */
 
 export async function listImages(client: MCPClient): Promise<AssetItem[]> {
-    const res = await client.callTool({ name: 'list-images', arguments: {} });
+    const res = (await client.callTool({ name: 'list-images', arguments: {} })) as CallToolResult;
+    if (res.isError) {
+        const msg = readError(res.content) || 'list-images failed';
+        throw new Error(msg);
+    }
     return toAssetsFromContent(res?.content || []) || [];
 }
 

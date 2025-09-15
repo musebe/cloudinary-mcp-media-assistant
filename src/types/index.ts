@@ -60,7 +60,10 @@ export type JSONPart = {
 export type ToolContent = TextPart | JSONPart | { type: string;[k: string]: unknown };
 
 // Represents the expected return type from a tool call.
-export type CallToolResult = { content?: ToolContent[] };
+export type CallToolResult = {
+    content?: ToolContent[];
+    isError?: boolean;        
+};
 
 // Represents the expected return type from listing available tools.
 export type ListToolsResult = { tools?: { name: string }[] };
