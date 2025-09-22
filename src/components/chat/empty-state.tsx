@@ -1,4 +1,5 @@
 // components/chat/empty-state.tsx
+
 import { MessageSquare } from 'lucide-react'; // A popular icon library
 
 export function EmptyState() {

@@ -1,3 +1,5 @@
+// src/components/chat/tools-list.tsx
+
 export function ToolsList({ tools }: { tools: string[] }) {
   if (!tools?.length) return null;
   return (

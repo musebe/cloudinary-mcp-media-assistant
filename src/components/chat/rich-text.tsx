@@ -1,3 +1,5 @@
+// src/components/chat/rich-text.tsx
+
 'use client';
 
 import React, { useMemo } from 'react';

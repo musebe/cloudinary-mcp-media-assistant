@@ -1,4 +1,5 @@
 // src/lib/mcp-utils.ts
+
 import { AssetItem, ToolContent, JSONPart, TextPart } from '@/types';
 
 function isObject(v: unknown): v is Record<string, unknown> {

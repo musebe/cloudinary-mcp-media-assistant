@@ -1,4 +1,5 @@
 // src/app/(chat)/page.tsx
+
 import { Card } from '@/components/ui/card';
 import { ChatContainer } from '@/components/chat/chat-container';
 

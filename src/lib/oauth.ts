@@ -1,3 +1,5 @@
+// src/lib/oauth.ts
+
 // Demo only. Replace with a DB or secure KV in prod.
 
 type TokenSet = { access_token: string; refresh_token?: string; expires_at?: number };

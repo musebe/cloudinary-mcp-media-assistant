@@ -1,4 +1,5 @@
 // src/lib/ai-guide.ts
+
 import { openai } from '@/lib/openai';
 import { GuideInput } from '@/types';
 

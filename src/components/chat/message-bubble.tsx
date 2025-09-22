@@ -1,3 +1,5 @@
+// src/components/chat/message-bubble.tsx
+
 import { cn } from '@/lib/utils';
 import { ReactNode } from 'react';
 
